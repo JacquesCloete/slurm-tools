@@ -75,6 +75,14 @@ class SlurmConfig:
     """Post-rsync symlinks. Each entry: ``{link: <relpath-under-remote_path>, target: <absolute>}``.
     Both fields support ``${cluster_paths.X}`` interpolation. Literal ``$HOME`` / ``$SCRATCHDIR``
     pass through to the remote shell."""
+    log_glob: str = ""
+    """Optional shell glob pattern (relative to ``remote_path``) the GUI walks to locate
+    log files for a given job ID. Supports a literal ``{jobid}`` placeholder and shell
+    wildcards (``*``, ``?``). Useful with ``snapshot=True`` (logs land in per-submission
+    subdirs that the default ``remote_path/slurm/slurm-{jobid}.out`` doesn't see) and with
+    ``array_size`` (one log per array task). When unset, falls back to the legacy
+    ``remote_path/slurm/slurm-<jobid>.out``. Example:
+    ``"snapshots/*/slurm/slurm-{jobid}_*.out"``."""
 
 
 def load_clusters() -> list[SlurmConfig]:

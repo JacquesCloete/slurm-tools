@@ -7,7 +7,7 @@ from pathlib import Path
 
 from flask import Flask, Response, render_template, request
 
-from slurm_tools.slurm import SlurmConfig, load_clusters
+from slurm_tools.slurm import SlurmConfig, interpolate, load_clusters
 
 CLUSTERS: list[tuple[str, SlurmConfig]] = [
     (c.name or c.host or f"cluster-{i + 1}", c)
@@ -209,6 +209,25 @@ def cancel(job_id):
 
 
 
+def resolve_log_paths(cluster: SlurmConfig, job_id: str) -> str:
+    """Return a shell-ready path or glob locating the log file(s) for ``job_id``.
+
+    If ``cluster.log_glob`` is set, expand its ``{jobid}`` placeholder and any
+    ``${cluster_paths.X}`` references; the resulting pattern (which may contain
+    shell wildcards) is interpreted as relative to ``remote_path`` unless it
+    begins with ``/`` or ``$`` (an unexpanded shell var the remote shell will
+    handle). Otherwise fall back to the legacy single-file path
+    ``<remote_path>/slurm/slurm-<jobid>.out``.
+    """
+    if not cluster.log_glob:
+        return f"{cluster.remote_path}/slurm/slurm-{job_id}.out"
+    pattern = cluster.log_glob.replace("{jobid}", job_id)
+    pattern = interpolate(pattern, cluster.cluster_paths)
+    if pattern.startswith(("/", "$")):
+        return pattern
+    return f"{cluster.remote_path}/{pattern}"
+
+
 @app.route("/logs/<job_id>/history")
 def logs_history(job_id):
     """Stream the existing log file as chunked plain text (fast initial load)."""
@@ -216,7 +235,9 @@ def logs_history(job_id):
         return "Bad job id", 400
 
     cluster = current_cluster()
-    cmd = f"cat {cluster.remote_path}/slurm/slurm-{job_id}.out"
+    log_paths = resolve_log_paths(cluster, job_id)
+    # 2>/dev/null suppresses "no such file" if the glob matches nothing.
+    cmd = f"cat {log_paths} 2>/dev/null"
 
     def stream():
         proc = subprocess.Popen(
@@ -242,7 +263,11 @@ def logs(job_id):
         return "Bad job id", 400
 
     cluster = current_cluster()
-    cmd = f"tail -n 0 -f {cluster.remote_path}/slurm/slurm-{job_id}.out"
+    log_paths = resolve_log_paths(cluster, job_id)
+    # tail -f over a glob follows whichever files exist at command start; new
+    # array tasks that begin writing later won't be picked up. Acceptable for V1
+    # of snapshot-aware logs — the user can refresh the page to re-glob.
+    cmd = f"tail -n 0 -f {log_paths} 2>/dev/null"
 
     def stream():
         proc = subprocess.Popen(

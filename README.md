@@ -119,6 +119,28 @@ symlinks:
 The `snapshots` key is special: it's required when `snapshot: true`. Every other
 key in `cluster_paths` is just a label the consumer (or `symlinks:`) refers to.
 
+### GUI logs with snapshots / arrays
+
+By default the GUI streams logs from `<remote_path>/slurm/slurm-<jobid>.out`,
+which assumes a single fixed `remote_path` and one log per job. Two scenarios
+break this:
+
+- **Snapshot deploys** put logs under `<cluster_paths.snapshots>/<ts>_<sha>/slurm/`,
+  not under `remote_path`.
+- **Array jobs** write one log per task (`slurm-<A>_<a>.out`), so the GUI's
+  single-file path misses every task but the imaginary `<jobid>.out`.
+
+Set `log_glob` to a shell glob (relative to `remote_path`) with a `{jobid}`
+placeholder and the GUI will walk it for both the initial history dump and the
+SSE tail stream. Supports `${cluster_paths.X}` interpolation. Example matching
+all snapshot + array task logs:
+
+```yaml
+log_glob: "snapshots/*/slurm/slurm-{jobid}_*.out"
+```
+
+When unset (the default), the legacy single-file behaviour applies.
+
 ### Array submission
 
 Set `array_size: N` to emit `#SBATCH --array=0-(N-1)` and switch the output
@@ -216,6 +238,7 @@ Create the socket directory once: `mkdir -p ~/.ssh/sockets`.
 | `array_size`      | `null`  | If set, emit `#SBATCH --array=0-(N-1)`; output switches to `slurm/slurm-%A_%a.out` |
 | `cluster_paths`   | `{}`    | Named cluster paths (string → string). Values may contain shell vars expanded on the remote host (see [Cluster paths and symlinks](#cluster-paths-and-symlinks)) |
 | `symlinks`        | `[]`    | List of `{link, target}` pairs created on the remote host after rsync. Both support `${cluster_paths.X}` interpolation |
+| `log_glob`        | `""`    | Optional shell glob (relative to `remote_path`) the GUI walks to locate log files for a job ID. Supports a `{jobid}` placeholder and `${cluster_paths.X}` interpolation. Defaults to `remote_path/slurm/slurm-<jobid>.out` (see [GUI logs with snapshots / arrays](#gui-logs-with-snapshots--arrays)) |
 
 ### Setting environment variables
 
