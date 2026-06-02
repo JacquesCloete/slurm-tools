@@ -58,7 +58,7 @@ class SlurmConfig:
     priority: bool = False
     dry_run: bool = False
     envs: list[Any] = field(default_factory=list)
-    # New in plato-ltl-extensions:
+    # New in dev (v0.2.0):
     snapshot: bool = False
     """If true, rsync to ``<cluster_paths.snapshots>/<ts>_<sha>/`` instead of ``remote_path``."""
     snapshot_name: str = ""
