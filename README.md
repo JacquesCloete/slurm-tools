@@ -10,7 +10,13 @@ uv pip install git+https://github.com/reeceomahoney/slurm-tools.git
 
 ## Configuration
 
-Place a `configs/slurm.yaml` in your working directory:
+Place a cluster config in your working directory. The resolver searches, in order:
+
+1. `$SLURM_CONFIG` (absolute or relative to the project root)
+2. `slurm/slurm.yaml` *(preferred)*
+3. `configs/slurm.yaml` *(legacy upstream location)*
+
+Minimal example:
 
 ```yaml
 host: my-cluster
@@ -64,25 +70,102 @@ clusters:
 The GUI shows one tab per cluster. The CLI submits to the first cluster in the
 mapping by default; pass `--cluster NAME` to target another.
 
+### Snapshot deploys
+
+By default `slurm run` rsyncs into `remote_path`, overwriting whatever is there. For
+multi-submission workflows (e.g. sweeps) you want each submission frozen against a
+particular source revision so iterating on code locally doesn't disturb running
+jobs. Set `snapshot: true` and a `cluster_paths.snapshots` directory and each
+submission lands in `<cluster_paths.snapshots>/<YYYY-MM-DD_HHMMSS>_<short-sha>/`.
+The resolved path is printed as `snapshot_path=...` on the last line of stdout so
+callers can capture it.
+
+```yaml
+remote_path: $HOME/project    # used when snapshot=false (default)
+snapshot: true                # rsync to a timestamped + sha-keyed subdir instead
+cluster_paths:
+  snapshots: $HOME/project/snapshots
+```
+
+Override the auto-computed `<ts>_<sha>` subpath with `snapshot_name: ...` when one
+logical submission spans multiple CLI invocations (e.g. a separate `slurm sync`
+followed by `slurm run`).
+
+### Cluster paths and symlinks
+
+`cluster_paths:` is an arbitrary name → path map. Values may contain shell
+variables like `$HOME` / `$SCRATCHDIR` / `$PROJECTDIR`; they're expanded on the
+*remote* shell, not locally. Use this for any path that should be reusable across
+submissions (datasets, virtual environments, persistent outputs).
+
+`symlinks:` is a list of `{link, target}` pairs created on the remote host
+immediately after rsync. Both fields support `${cluster_paths.X}` interpolation
+(expanded locally), plus literal `$HOME` etc. (passed through to the remote
+shell):
+
+```yaml
+cluster_paths:
+  snapshots: $HOME/project/snapshots
+  envs:      $PROJECTDIR/me/project/envs
+  data:      $PROJECTDIR/me/project/data
+
+symlinks:
+  - link: data                            # relative to remote_path / snapshot
+    target: ${cluster_paths.data}
+  - link: .venv
+    target: ${cluster_paths.envs}/abc123  # link from snapshot into shared env
+```
+
+The `snapshots` key is special: it's required when `snapshot: true`. Every other
+key in `cluster_paths` is just a label the consumer (or `symlinks:`) refers to.
+
+### Array submission
+
+Set `array_size: N` to emit `#SBATCH --array=0-(N-1)` and switch the output
+filename to `slurm/slurm-%A_%a.out`. Your `command` is run once per task and can
+read `$SLURM_ARRAY_TASK_ID` to dispatch work:
+
+```yaml
+array_size: 8
+command: |-
+  python run_task.py --task-id $SLURM_ARRAY_TASK_ID
+```
+
 ## Usage
+
+### Initialise a cluster (`slurm init`)
+
+```bash
+slurm init                # mkdir -p every value in cluster_paths over a single ssh call
+slurm init --cluster dev  # target a specific cluster
+slurm init --dry_run true # print the paths that would be created without ssh-ing
+```
+
+Run once per cluster after writing `cluster_paths:`. Idempotent — safe to re-run.
+The shell variables in `cluster_paths` values are expanded on the *remote* host.
 
 ### Submit a job
 
 ```bash
-slurm run                          # uses configs/slurm.yaml
+slurm run                          # uses the resolved cluster config
 slurm run --cluster dev            # target a specific cluster (see Multiple clusters)
 slurm run --gpu l40s --time 3      # override specific fields
 slurm run --command "make eval"    # override command
 slurm run --dry_run true           # print the sbatch script without submitting
 ```
 
-This rsyncs the project to the remote host (respecting `.gitignore`), then submits via `sbatch`.
+This rsyncs the project to the remote host (respecting `.gitignore`), applies any
+`symlinks:` entries, then submits via `sbatch`. When `snapshot: true`, the rsync
+target is the timestamped subdirectory and the resolved path is printed as
+`snapshot_path=...`.
 
 ### Sync only
 
 ```bash
 slurm sync                         # rsync the project without submitting a job
 ```
+
+Honours `snapshot:` and `symlinks:` the same way `slurm run` does.
 
 ### Web GUI
 
@@ -126,6 +209,11 @@ Create the socket directory once: `mkdir -p ~/.ssh/sockets`.
 | `priority`    | `false` | Use priority credits (if available)|
 | `dry_run`     | `false` | Print sbatch script without submit |
 | `envs`        | `[]`    | Env vars to set in the job — bare names are forwarded from local, `KEY: value` entries are set literally (see below) |
+| `snapshot`        | `false` | If true, rsync to `<cluster_paths.snapshots>/<ts>_<sha>/` instead of `remote_path` (see [Snapshot deploys](#snapshot-deploys)) |
+| `snapshot_name`   | `""`    | Override the auto-computed `<ts>_<sha>` subpath (useful for multi-CLI submissions) |
+| `array_size`      | `null`  | If set, emit `#SBATCH --array=0-(N-1)`; output switches to `slurm/slurm-%A_%a.out` |
+| `cluster_paths`   | `{}`    | Named cluster paths (string → string). Values may contain shell vars expanded on the remote host (see [Cluster paths and symlinks](#cluster-paths-and-symlinks)) |
+| `symlinks`        | `[]`    | List of `{link, target}` pairs created on the remote host after rsync. Both support `${cluster_paths.X}` interpolation |
 
 ### Setting environment variables
 
