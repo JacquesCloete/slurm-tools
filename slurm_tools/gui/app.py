@@ -202,26 +202,52 @@ def jobs():
 
 @app.route("/cancel/<job_id>", methods=["POST"])
 def cancel(job_id):
-    if not job_id.isdigit():
+    # Accept both ``<A>`` (whole array) and ``<A>_<a>`` (single array task).
+    if parse_job_id(job_id) is None:
         return "Bad job id", 400
     ssh(current_cluster(), f"scancel {job_id}")
     return "", 204
 
 
 
+JOB_ID_RE = re.compile(r"^(\d+)(?:_(\d+))?$")
+
+
+def parse_job_id(job_id: str) -> tuple[str, str] | None:
+    """Split ``<A>`` or ``<A>_<a>`` into ``(base, arrayidx)`` or return ``None``.
+
+    For non-array jobs ``arrayidx`` is the empty string. Returns ``None`` for
+    anything that isn't ``\\d+`` or ``\\d+_\\d+`` so route handlers can reject
+    obvious garbage before shelling out.
+    """
+    m = JOB_ID_RE.match(job_id)
+    if m is None:
+        return None
+    return m.group(1), m.group(2) or ""
+
+
 def resolve_log_paths(cluster: SlurmConfig, job_id: str) -> str:
     """Return a shell-ready path or glob locating the log file(s) for ``job_id``.
 
-    If ``cluster.log_glob`` is set, expand its ``{jobid}`` placeholder and any
-    ``${cluster_paths.X}`` references; the resulting pattern (which may contain
-    shell wildcards) is interpreted as relative to ``remote_path`` unless it
-    begins with ``/`` or ``$`` (an unexpanded shell var the remote shell will
-    handle). Otherwise fall back to the legacy single-file path
-    ``<remote_path>/slurm/slurm-<jobid>.out``.
+    ``job_id`` may be a bare job ID (``\\d+``) or an array-task ID
+    (``\\d+_\\d+``). For array tasks the base job ID is used as the ``{jobid}``
+    template variable so the same glob matches every task in the array; pass
+    ``{arrayidx}`` in your ``log_glob`` to narrow to a specific task.
+
+    If ``cluster.log_glob`` is set, expand its ``{jobid}`` and optional
+    ``{arrayidx}`` placeholders and any ``${cluster_paths.X}`` references; the
+    resulting pattern (which may contain shell wildcards) is interpreted as
+    relative to ``remote_path`` unless it begins with ``/`` or ``$`` (an
+    unexpanded shell var the remote shell will handle). Otherwise fall back to
+    the legacy single-file path ``<remote_path>/slurm/slurm-<jobid>.out``.
     """
+    parsed = parse_job_id(job_id)
+    base = parsed[0] if parsed else job_id
+    arrayidx = parsed[1] if parsed else ""
+
     if not cluster.log_glob:
-        return f"{cluster.remote_path}/slurm/slurm-{job_id}.out"
-    pattern = cluster.log_glob.replace("{jobid}", job_id)
+        return f"{cluster.remote_path}/slurm/slurm-{base}.out"
+    pattern = cluster.log_glob.replace("{jobid}", base).replace("{arrayidx}", arrayidx)
     pattern = interpolate(pattern, cluster.cluster_paths)
     if pattern.startswith(("/", "$")):
         return pattern
@@ -231,7 +257,7 @@ def resolve_log_paths(cluster: SlurmConfig, job_id: str) -> str:
 @app.route("/logs/<job_id>/history")
 def logs_history(job_id):
     """Stream the existing log file as chunked plain text (fast initial load)."""
-    if not job_id.isdigit():
+    if parse_job_id(job_id) is None:
         return "Bad job id", 400
 
     cluster = current_cluster()
@@ -259,7 +285,7 @@ def logs_history(job_id):
 @app.route("/logs/<job_id>")
 def logs(job_id):
     """SSE stream of newly-appended log lines only (use /history for backlog)."""
-    if not job_id.isdigit():
+    if parse_job_id(job_id) is None:
         return "Bad job id", 400
 
     cluster = current_cluster()

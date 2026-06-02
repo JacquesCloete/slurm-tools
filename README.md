@@ -141,6 +141,12 @@ log_glob: "snapshots/*/slurm/slurm-{jobid}_*.out"
 
 When unset (the default), the legacy single-file behaviour applies.
 
+When a user clicks the `logs` button next to an array task (whose JobID is
+`<A>_<a>`), the GUI uses the base job ID `<A>` for the `{jobid}` placeholder so
+the same glob matches every task in the array. Pass `{arrayidx}` in your glob to
+target a single task instead — e.g. `slurm-{jobid}_{arrayidx}.out`. The cancel
+button works on both forms (`<A>` cancels the array, `<A>_<a>` cancels a task).
+
 ### Array submission
 
 Set `array_size: N` to emit `#SBATCH --array=0-(N-1)` and switch the output
