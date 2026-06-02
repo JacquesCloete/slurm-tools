@@ -230,20 +230,25 @@ def resolve_log_paths(cluster: SlurmConfig, job_id: str) -> str:
     """Return a shell-ready path or glob locating the log file(s) for ``job_id``.
 
     ``job_id`` may be a bare job ID (``\\d+``) or an array-task ID
-    (``\\d+_\\d+``). For array tasks the base job ID is used as the ``{jobid}``
-    template variable so the same glob matches every task in the array; pass
-    ``{arrayidx}`` in your ``log_glob`` to narrow to a specific task.
+    (``\\d+_\\d+``). The ``{jobid}`` template variable always resolves to the
+    base job ID. ``{arrayidx}`` resolves to the array task index when the user
+    clicked a specific task, and to ``*`` (shell wildcard, matches any task)
+    when the user clicked the bare base ID — so a template like
+    ``slurm-{jobid}_{arrayidx}.out`` shows a single task's log on a per-task
+    click and every task's log when the base ID is clicked.
 
-    If ``cluster.log_glob`` is set, expand its ``{jobid}`` and optional
-    ``{arrayidx}`` placeholders and any ``${cluster_paths.X}`` references; the
-    resulting pattern (which may contain shell wildcards) is interpreted as
-    relative to ``remote_path`` unless it begins with ``/`` or ``$`` (an
-    unexpanded shell var the remote shell will handle). Otherwise fall back to
-    the legacy single-file path ``<remote_path>/slurm/slurm-<jobid>.out``.
+    If ``cluster.log_glob`` is set, expand its ``{jobid}`` and ``{arrayidx}``
+    placeholders and any ``${cluster_paths.X}`` references; the resulting
+    pattern (which may contain shell wildcards) is interpreted as relative to
+    ``remote_path`` unless it begins with ``/`` or ``$`` (an unexpanded shell
+    var the remote shell will handle). Otherwise fall back to the legacy
+    single-file path ``<remote_path>/slurm/slurm-<jobid>.out``.
     """
     parsed = parse_job_id(job_id)
     base = parsed[0] if parsed else job_id
-    arrayidx = parsed[1] if parsed else ""
+    # Default arrayidx to "*" so templates like `slurm-{jobid}_{arrayidx}.out`
+    # still match every task when the user clicks the base array job ID.
+    arrayidx = parsed[1] if parsed and parsed[1] else "*"
 
     if not cluster.log_glob:
         return f"{cluster.remote_path}/slurm/slurm-{base}.out"
