@@ -137,9 +137,11 @@ command: |-
 
 ```bash
 slurm init                # mkdir -p every value in cluster_paths over a single ssh call
-slurm init --cluster dev  # target a specific cluster
+slurm init --cluster dev  # target a specific cluster — only meaningful with a `clusters:` mapping
 slurm init --dry_run true # print the paths that would be created without ssh-ing
 ```
+
+`--cluster` is only relevant for [multi-cluster](#multiple-clusters) configs; for a single-cluster yaml the flag has no effect (and passing a name that doesn't match errors out).
 
 Run once per cluster after writing `cluster_paths:`. Idempotent — safe to re-run.
 The shell variables in `cluster_paths` values are expanded on the *remote* host.
@@ -148,7 +150,7 @@ The shell variables in `cluster_paths` values are expanded on the *remote* host.
 
 ```bash
 slurm run                          # uses the resolved cluster config
-slurm run --cluster dev            # target a specific cluster (see Multiple clusters)
+slurm run --cluster dev            # multi-cluster only — see Multiple clusters
 slurm run --gpu l40s --time 3      # override specific fields
 slurm run --command "make eval"    # override command
 slurm run --dry_run true           # print the sbatch script without submitting
