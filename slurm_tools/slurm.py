@@ -58,6 +58,10 @@ class SlurmConfig:
     priority: bool = False
     dry_run: bool = False
     envs: list[Any] = field(default_factory=list)
+    """Env vars to export into the job script. Each entry is one of:
+    ``NAME`` (bare) -> REQUIRED passthrough: forward ``$NAME`` from the submitting
+    shell, abort if unset; ``{NAME: value}`` -> export a literal value;
+    ``{NAME: null}`` -> OPTIONAL passthrough: forward ``$NAME`` if set, else skip."""
     # New in dev (v0.2.0):
     snapshot: bool = False
     """If true, rsync to ``<cluster_paths.snapshots>/<ts>_<sha>/`` instead of ``remote_path``."""
@@ -248,11 +252,19 @@ def build_sbatch_script(cfg: SlurmConfig) -> str:
     for entry in cfg.envs:
         if isinstance(entry, dict):
             name, value = next(iter(entry.items()))
+            # `{NAME: null}` => OPTIONAL passthrough: forward $NAME from the local
+            # environment if set, skip silently if not (no abort). Use for vars a
+            # job only sometimes needs (e.g. WANDB_API_KEY when W&B logging is on).
+            if value is None:
+                if name in os.environ:
+                    exports += f"export {name}={shlex.quote(os.environ[name])}\n"
+                continue
             escaped = (
                 str(value).replace("\\", "\\\\").replace('"', '\\"').replace("`", "\\`")
             )
             exports += f'export {name}="{escaped}"\n'
         else:
+            # Bare `NAME` => REQUIRED passthrough: forward $NAME, abort if unset.
             name = entry
             if name not in os.environ:
                 print(f"Error: envs requested '{name}' but it is not set locally")
