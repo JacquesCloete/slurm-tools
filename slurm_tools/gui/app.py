@@ -1,5 +1,6 @@
 """SLURM experiment monitor — lightweight web GUI."""
 
+import fnmatch
 import re
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
@@ -155,12 +156,26 @@ def nodes():
 @app.route("/jobs")
 def jobs():
     cluster = current_cluster()
-    raw, raw_closed = ssh_many(
-        cluster,
+    cmds = [
         "squeue -u $USER -o '%.12i %.30j %.8T %.10M %.20b'",
         "sacct -u $USER -S now-7days --noheader --parsable2 -X "
         "-o 'JobID,JobName,State,Elapsed,AllocTRES' "
         "| grep -vE 'RUNNING|PENDING'",
+    ]
+    # When a log_glob is configured, also list every log file that still exists
+    # on disk (concurrently — it doesn't depend on the sacct result) so we can
+    # drop closed jobs whose logs have been deleted. This keeps the closed-jobs
+    # panel a reflection of what's actually on the cluster rather than a flat
+    # 7-day sacct window. Active (squeue) jobs are never filtered.
+    listing_glob = log_listing_glob(cluster)
+    if listing_glob is not None:
+        cmds.append(f"ls -1 {listing_glob} 2>/dev/null")
+    results = ssh_many(cluster, *cmds)
+    raw, raw_closed = results[0], results[1]
+    existing_log_basenames = (
+        {Path(ln).name for ln in results[2].splitlines() if ln.strip()}
+        if listing_glob is not None
+        else None
     )
     headers, rows = parse_table(raw)
     # Rename ugly TRES_PER_NODE header
@@ -190,6 +205,13 @@ def jobs():
                 gpu = f"{name.upper()}:{count}" if count else name.upper()
                 break
         row[4:] = [gpu]
+    # Drop closed jobs whose log files no longer exist on disk (deleted runs).
+    if existing_log_basenames is not None:
+        closed_rows = [
+            row
+            for row in closed_rows
+            if row and job_has_log(cluster, row[0], existing_log_basenames)
+        ]
     closed_headers = ["JOBID", "NAME", "STATE", "ELAPSED", "GPU"] if closed_rows else []
     return render_template(
         "jobs.html",
@@ -257,6 +279,31 @@ def resolve_log_paths(cluster: SlurmConfig, job_id: str) -> str:
     if pattern.startswith(("/", "$")):
         return pattern
     return f"{cluster.remote_path}/{pattern}"
+
+
+def log_listing_glob(cluster: SlurmConfig) -> str | None:
+    """Shell glob matching EVERY job's log file, or ``None`` if not filterable.
+
+    Replaces both ``{jobid}`` and ``{arrayidx}`` with ``*`` so a single remote
+    ``ls`` enumerates all logs that currently exist on disk. Returns ``None``
+    when no ``log_glob`` is configured (nothing to filter against)."""
+    if not cluster.log_glob:
+        return None
+    pattern = cluster.log_glob.replace("{jobid}", "*").replace("{arrayidx}", "*")
+    pattern = interpolate(pattern, cluster.cluster_paths)
+    if not pattern.startswith(("/", "$")):
+        pattern = f"{cluster.remote_path}/{pattern}"
+    return pattern
+
+
+def job_has_log(cluster: SlurmConfig, job_id: str, existing_basenames: set[str]) -> bool:
+    """True if some on-disk log file matches ``job_id``'s log pattern.
+
+    Compares on basename only: the resolved pattern carries an unexpanded shell
+    var (e.g. ``$SCRATCHDIR``) while the listed paths are already expanded, so
+    the directory parts won't compare equal — the filename component does."""
+    pat = Path(resolve_log_paths(cluster, job_id)).name
+    return any(fnmatch.fnmatch(name, pat) for name in existing_basenames)
 
 
 @app.route("/logs/<job_id>/history")
