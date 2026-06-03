@@ -345,11 +345,25 @@ def logs(job_id):
     # tail -f over a glob follows whichever files exist at command start; new
     # array tasks that begin writing later won't be picked up. Acceptable for V1
     # of snapshot-aware logs — the user can refresh the page to re-glob.
-    cmd = f"tail -n 0 -f {log_paths} 2>/dev/null"
+    #
+    # Wrap the remote `tail -f` in a stdin-EOF watchdog so it can't outlive this
+    # SSE connection. Without a PTY, killing the local ssh client does NOT signal
+    # the remote command, so a bare `tail -f` would be orphaned on the login node
+    # (holding the log file open) every time a log pane closes. Instead: run tail
+    # in the background and block on `cat` reading the ssh channel's stdin. When
+    # this connection ends — we close proc.stdin below, or the ssh dies and the
+    # channel tears down — the remote `cat` sees EOF and kills the tail. No PTY,
+    # so the SSE output path is unchanged (a PTY would inject CRLF and corrupt the
+    # `data: …\n\n` framing).
+    cmd = (
+        f"tail -n 0 -f {log_paths} 2>/dev/null & tailpid=$!; "
+        f'cat >/dev/null; kill "$tailpid" 2>/dev/null'
+    )
 
     def stream():
         proc = subprocess.Popen(
             ["ssh", "-q", cluster.host, cmd],
+            stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -358,6 +372,10 @@ def logs(job_id):
             for line in proc.stdout or []:
                 yield f"data: {line.rstrip()}\n\n"
         finally:
+            # Closing stdin forwards EOF through the live ssh to the remote `cat`,
+            # which then kills the tail and lets the whole chain unwind cleanly.
+            if proc.stdin:
+                proc.stdin.close()
             proc.terminate()
             proc.wait()
 
