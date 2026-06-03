@@ -248,16 +248,36 @@ def parse_job_id(job_id: str) -> tuple[str, str] | None:
     return m.group(1), m.group(2) or ""
 
 
+def expand_log_glob(template: str, jobid: str, arrayidx: str) -> str:
+    """Substitute ``{jobid}`` / ``{arrayidx}`` in a ``log_glob`` template.
+
+    ``arrayidx`` is a concrete task index, or ``"*"`` for the "match any task"
+    case (a bare job-ID click, or the all-jobs listing). In the wildcard case a
+    ``_{arrayidx}`` group is collapsed to a single ``*`` — dropping the literal
+    ``_`` separator — so the glob ALSO matches a non-array log
+    (``slurm-<jobid>.out``, which carries no ``_<taskidx>`` suffix). A concrete
+    index keeps the ``_<idx>`` form, preserving the per-task array log view.
+    Templates without the ``_{arrayidx}`` group fall back to a plain
+    ``{arrayidx}`` substitution.
+    """
+    if arrayidx == "*" and "_{arrayidx}" in template:
+        out = template.replace("_{arrayidx}", "*")
+    else:
+        out = template.replace("{arrayidx}", arrayidx)
+    return out.replace("{jobid}", jobid)
+
+
 def resolve_log_paths(cluster: SlurmConfig, job_id: str) -> str:
     """Return a shell-ready path or glob locating the log file(s) for ``job_id``.
 
     ``job_id`` may be a bare job ID (``\\d+``) or an array-task ID
     (``\\d+_\\d+``). The ``{jobid}`` template variable always resolves to the
     base job ID. ``{arrayidx}`` resolves to the array task index when the user
-    clicked a specific task, and to ``*`` (shell wildcard, matches any task)
-    when the user clicked the bare base ID — so a template like
-    ``slurm-{jobid}_{arrayidx}.out`` shows a single task's log on a per-task
-    click and every task's log when the base ID is clicked.
+    clicked a specific task; on a bare base-ID click it becomes ``*`` (match any
+    task) AND the ``_{arrayidx}`` separator collapses so the glob also matches a
+    non-array log — so a template like ``slurm-{jobid}_{arrayidx}.out`` shows a
+    single task's log on a per-task click, and every task's log (array) plus the
+    bare ``slurm-<jobid>.out`` (non-array) when the base ID is clicked.
 
     If ``cluster.log_glob`` is set, expand its ``{jobid}`` and ``{arrayidx}``
     placeholders and any ``${cluster_paths.X}`` references; the resulting
@@ -274,7 +294,7 @@ def resolve_log_paths(cluster: SlurmConfig, job_id: str) -> str:
 
     if not cluster.log_glob:
         return f"{cluster.remote_path}/slurm/slurm-{base}.out"
-    pattern = cluster.log_glob.replace("{jobid}", base).replace("{arrayidx}", arrayidx)
+    pattern = expand_log_glob(cluster.log_glob, base, arrayidx)
     pattern = interpolate(pattern, cluster.cluster_paths)
     if pattern.startswith(("/", "$")):
         return pattern
@@ -284,12 +304,13 @@ def resolve_log_paths(cluster: SlurmConfig, job_id: str) -> str:
 def log_listing_glob(cluster: SlurmConfig) -> str | None:
     """Shell glob matching EVERY job's log file, or ``None`` if not filterable.
 
-    Replaces both ``{jobid}`` and ``{arrayidx}`` with ``*`` so a single remote
-    ``ls`` enumerates all logs that currently exist on disk. Returns ``None``
+    Wildcards both ``{jobid}`` and ``{arrayidx}`` (collapsing the ``_{arrayidx}``
+    group so non-array logs match too) so a single remote ``ls`` enumerates all
+    logs — array and non-array — that currently exist on disk. Returns ``None``
     when no ``log_glob`` is configured (nothing to filter against)."""
     if not cluster.log_glob:
         return None
-    pattern = cluster.log_glob.replace("{jobid}", "*").replace("{arrayidx}", "*")
+    pattern = expand_log_glob(cluster.log_glob, "*", "*")
     pattern = interpolate(pattern, cluster.cluster_paths)
     if not pattern.startswith(("/", "$")):
         pattern = f"{cluster.remote_path}/{pattern}"
