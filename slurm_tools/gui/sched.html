@@ -1,0 +1,13 @@
+{% if running is not none or pending is not none %}
+<div class="sched">
+  {% if running is not none %}
+  <span class="sched-item"><span class="sched-num sched-run">{{ running }}</span> running</span>
+  {% endif %}
+  {% if pending is not none %}
+  <span class="sched-item"><span class="sched-num sched-pend">{{ pending }}</span> pending</span>
+  {% endif %}
+  {% if backfill_s is not none %}
+  <span class="sched-item" title="Backfill scheduler last cycle — how long the pass that starts low-priority jobs took">backfill {{ backfill_s }}s</span>
+  {% endif %}
+</div>
+{% endif %}

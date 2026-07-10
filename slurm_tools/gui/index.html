@@ -48,7 +48,16 @@
           </div>
         </div>
         <div class="card left-bottom">
-          <h2>GPUs</h2>
+          <div class="card-header">
+            <h2>GPUs</h2>
+            <div
+              id="sched-pane"
+              hx-get="/sched"
+              hx-vals='js:{cluster: currentCluster}'
+              hx-trigger="load, every 30s"
+              hx-swap="innerHTML"
+            ></div>
+          </div>
           <div
             id="nodes-pane"
             hx-get="/nodes"
@@ -92,6 +101,11 @@
         });
         htmx.ajax("GET", "/nodes", {
           target: "#nodes-pane",
+          swap: "innerHTML",
+          values: { cluster: name },
+        });
+        htmx.ajax("GET", "/sched", {
+          target: "#sched-pane",
           swap: "innerHTML",
           values: { cluster: name },
         });

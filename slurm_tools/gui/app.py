@@ -153,6 +153,36 @@ def nodes():
     return render_template("nodes.html", gpus=gpus)
 
 
+JOBS_RUNNING_RE = re.compile(r"Jobs running:\s*(\d+)")
+JOBS_PENDING_RE = re.compile(r"Jobs pending:\s*(\d+)")
+BF_LAST_CYCLE_RE = re.compile(r"Last cycle:\s*(\d+)")
+
+
+@app.route("/sched")
+def sched():
+    """Minimal cluster-load strip parsed from sdiag (controller diagnostics)."""
+    cluster = current_cluster()
+    raw = ssh(cluster, "sdiag")
+
+    def find(pattern: re.Pattern, text: str) -> int | None:
+        m = pattern.search(text)
+        return int(m.group(1)) if m else None
+
+    running = find(JOBS_RUNNING_RE, raw)
+    pending = find(JOBS_PENDING_RE, raw)
+
+    _, _, bf = raw.partition("Backfilling stats")
+    bf_us = find(BF_LAST_CYCLE_RE, bf)
+    backfill_s = round(bf_us / 1_000_000, 1) if bf_us is not None else None
+
+    return render_template(
+        "sched.html",
+        running=running,
+        pending=pending,
+        backfill_s=backfill_s,
+    )
+
+
 @app.route("/jobs")
 def jobs():
     cluster = current_cluster()

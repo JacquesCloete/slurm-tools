@@ -250,6 +250,23 @@ pre.log {
   right: 6px;
 }
 
+/* Cluster load strip */
+.sched {
+  display: flex;
+  gap: 0.9rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.sched-num {
+  font-weight: 600;
+}
+.sched-run {
+  color: var(--green);
+}
+.sched-pend {
+  color: var(--yellow);
+}
+
 .log-header,
 .card-header {
   display: flex;
